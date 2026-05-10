@@ -10,6 +10,8 @@ Usage:
 
 import json
 import logging
+import os
+import shutil
 import sys
 import time
 
@@ -25,6 +27,33 @@ logger = logging.getLogger(__name__)
 
 _SEP = "  " + "─" * 48
 
+# ── Chat avatar boxes ──
+
+_BLUE = "\033[34m"
+_GREEN = "\033[32m"
+_RESET = "\033[0m"
+
+
+def _box_lines(name, color_code):
+    """Return [top, middle, bottom] lines for an ASCII avatar box."""
+    inner = f" {name} "
+    border = f"{color_code}+{'-' * len(inner)}+{_RESET}"
+    middle = f"{color_code}|{inner}|{_RESET}"
+    return [border, middle, border]
+
+
+def _agent_box():
+    """Agent box — blue, left-aligned, shows 'Relay'."""
+    return [f"  {l}" for l in _box_lines("Relay", _BLUE)]
+
+
+def _user_box(username):
+    """User box — green, right-aligned."""
+    raw = _box_lines(username, _GREEN)
+    w = shutil.get_terminal_size().columns
+    pad = " " * max(0, w - 2 - len(raw[0]))
+    return [f"  {pad}{l}" for l in raw]
+
 # Optional: prompt_toolkit gives multi-line input, history, bottom-anchored prompt
 HAS_PT = False
 try:
@@ -37,7 +66,9 @@ except ImportError:
 
 
 def _make_prompt_session(enter_sends: bool):
-    """Build a PromptSession with Enter/Alt+Enter configured per preference."""
+    """Build a PromptSession with Enter/Alt+Enter configured per preference.
+    Returns None if terminal is not interactive (e.g. piped stdin).
+    """
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.shortcuts import PromptSession
 
@@ -60,7 +91,10 @@ def _make_prompt_session(enter_sends: bool):
         def _submit(event):
             event.current_buffer.validate_and_handle()
 
-    return PromptSession(multiline=True, key_bindings=kb)
+    try:
+        return PromptSession(multiline=True, key_bindings=kb)
+    except Exception:
+        return None
 
 
 def main():
@@ -79,16 +113,21 @@ def main():
     system_prompt = build_system_prompt(env)
 
     session = Session(cfg, system_prompt=system_prompt)
-    _print_banner(env, cfg)
+    username = os.environ.get("USERNAME") or os.environ.get("USER") or "user"
+    _print_banner(env, cfg, username)
 
     ps = _make_prompt_session(cfg.enter_sends) if HAS_PT else None
 
     while True:
         try:
+            # Print separator and user avatar BEFORE prompt
+            print(f"\n  {_SEP}")
+            for l in _user_box(username):
+                print(l)
             if ps:
-                line = ps.prompt(f"\n{_SEP}\n > ").strip()
+                line = ps.prompt("  > ").strip()
             else:
-                line = input(f"\n{_SEP}\n > ").strip()
+                line = input("  > ").strip()
         except KeyboardInterrupt:
             print()
             continue
@@ -105,8 +144,10 @@ def main():
             continue
 
         session.add_user_message(line)
+        # Input echo is already on screen ("> message"), no redraw needed
+
         try:
-            _process_turn(cfg, session)
+            _process_turn(cfg, session, username)
         except KeyboardInterrupt:
             print("\n  --- interrupted ---")
             session.pop_last_user_message()
@@ -154,7 +195,7 @@ def _stats_line(elapsed, usage=None, session=None):
     return "  ".join(parts)
 
 
-def _process_turn(cfg, session):
+def _process_turn(cfg, session, username="user"):
     """Run one user turn — may involve multiple tool-call rounds."""
     for turn in range(cfg.max_tool_turns):
         session.ensure_context_fit()
@@ -166,13 +207,11 @@ def _process_turn(cfg, session):
         usage_data = None
         turn_start = time.time()
 
-        # Bottom-anchored footer: spinner sits on line above SEP
+        # Spinner on its own line — no SEP below, it'll be at end
         sys.stdout.write("\n")
         sys.stdout.flush()
         spinner = RelaySpinner()
         spinner.start()
-        sys.stdout.write("\n" + "  " + "─" * 48 + "\033[A")
-        sys.stdout.flush()
 
         got_first_event = False
 
@@ -180,7 +219,10 @@ def _process_turn(cfg, session):
             if not got_first_event:
                 spinner.stop()
                 got_first_event = True
-                sys.stdout.write("\r\033[K  ")
+                sys.stdout.write("\r\033[K")
+                for line in _agent_box():
+                    sys.stdout.write(line + "\n")
+                sys.stdout.write("  ")
                 sys.stdout.flush()
 
             if kind == "content":
@@ -215,13 +257,13 @@ def _process_turn(cfg, session):
 
         if not tool_calls:
             if content_chunks:
-                print(f"  ──  {stats}\n")
+                print(f"  ──  {stats}")
                 session.add_assistant_message(
                     "".join(content_chunks),
                     reasoning="".join(reasoning_chunks) or None,
                 )
             else:
-                print("  ──\n")
+                print("  ──")
             return
 
         asst_msg = {
@@ -253,13 +295,14 @@ def _process_turn(cfg, session):
     session.pop_last_user_message()
 
 
-def _print_banner(env, cfg):
+def _print_banner(env, cfg, username="user"):
     avail = ", ".join(k for k in ("git", "node", "npm", "cargo", "go", "make") if env.get(k))
     os_ver = env.get("os", "")
     if env.get("os_version"):
         os_ver += f" ({env['os_version']})"
 
     lines = [
+        f"User:  {username}",
         f"Model: {cfg.model}",
         f"OS:    {os_ver}",
         f"Shell: {env.get('default_shell', '?')}",
