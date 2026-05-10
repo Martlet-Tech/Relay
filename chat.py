@@ -14,6 +14,7 @@ import sys
 
 from config import load_config, ConfigError
 from env_detect import detect_environment, build_system_prompt
+from relay_config import ensure_settings
 from session import Session
 from client import stream_chat_completion
 from tools import TOOL_DEFS, execute_tool
@@ -28,22 +29,40 @@ try:
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.shortcuts import PromptSession
 
-    _PT_KB = KeyBindings()
-
-    @_PT_KB.add("enter")
-    def _pt_submit(event):
-        event.current_buffer.validate_and_handle()
-
-    @_PT_KB.add("escape", "enter")
-    def _pt_newline(event):
-        event.current_buffer.insert_text("\n")
-
     HAS_PT = True
 except ImportError:
     pass
 
 
+def _make_prompt_session(enter_sends: bool):
+    """Build a PromptSession with Enter/Alt+Enter configured per preference."""
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.shortcuts import PromptSession
+
+    kb = KeyBindings()
+
+    if enter_sends:
+        @kb.add("enter")
+        def _submit(event):
+            event.current_buffer.validate_and_handle()
+
+        @kb.add("escape", "enter")
+        def _newline(event):
+            event.current_buffer.insert_text("\n")
+    else:
+        @kb.add("enter")
+        def _newline(event):
+            event.current_buffer.insert_text("\n")
+
+        @kb.add("escape", "enter")
+        def _submit(event):
+            event.current_buffer.validate_and_handle()
+
+    return PromptSession(multiline=True, key_bindings=kb)
+
+
 def main():
+    ensure_settings()
     try:
         cfg = load_config()
     except ConfigError as e:
@@ -60,7 +79,7 @@ def main():
     session = Session(cfg, system_prompt=system_prompt)
     _print_banner(env, cfg)
 
-    ps = PromptSession(multiline=True, key_bindings=_PT_KB) if HAS_PT else None
+    ps = _make_prompt_session(cfg.enter_sends) if HAS_PT else None
 
     while True:
         try:
