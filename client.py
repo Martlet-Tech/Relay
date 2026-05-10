@@ -106,6 +106,7 @@ def stream_chat_completion(messages, tools, cfg):
         ("content", str)      — text token
         ("reasoning", str)    — reasoning/chain-of-thought token
         ("tool_call", dict)   — completed tool call {id, name, args}
+        ("usage", dict)       — token usage {prompt_tokens, completion_tokens, total_tokens}
         ("warning", str)      — non-fatal warning (truncation etc.)
         ("error", str)        — fatal error (stop iterating)
     """
@@ -113,6 +114,7 @@ def stream_chat_completion(messages, tools, cfg):
         "model": cfg.model,
         "messages": list(messages),
         "stream": True,
+        "stream_options": {"include_usage": True},
         "max_tokens": cfg.max_tokens,
     }
     if tools:
@@ -138,6 +140,7 @@ def stream_chat_completion(messages, tools, cfg):
 
     buf = b""
     partials = {}
+    last_usage = None
 
     try:
         for chunk in iter(lambda: resp.read(4096), b""):
@@ -156,6 +159,10 @@ def stream_chat_completion(messages, tools, cfg):
                 except json.JSONDecodeError:
                     logger.warning("Bad SSE JSON: %.100s", payload)
                     continue
+
+                # Capture usage (sent in the final chunk by some providers)
+                if "usage" in obj:
+                    last_usage = obj["usage"]
 
                 choices = obj.get("choices", [])
                 if not choices:
@@ -190,6 +197,9 @@ def stream_chat_completion(messages, tools, cfg):
         logger.error("Stream read error: %s", e)
         yield ("error", f"Stream interrupted: {e}")
         return
+
+    if last_usage:
+        yield ("usage", last_usage)
 
     for idx in sorted(partials):
         p = partials[idx]

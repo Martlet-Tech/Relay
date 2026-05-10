@@ -11,6 +11,7 @@ Usage:
 import json
 import logging
 import sys
+import time
 
 from config import load_config, ConfigError
 from env_detect import detect_environment, build_system_prompt
@@ -18,6 +19,7 @@ from relay_config import ensure_settings
 from session import Session
 from client import stream_chat_completion
 from tools import TOOL_DEFS, execute_tool
+from spinner import RelaySpinner
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +138,22 @@ def _cmd(line, session, cfg):
     return True
 
 
+def _stats_line(elapsed, usage=None, session=None):
+    """Build a compact stats string e.g. '3.2s  150tok  ctx:72%'."""
+    parts = [f"{elapsed:.1f}s"]
+    if usage:
+        total = usage.get("total_tokens") or usage.get("completion_tokens")
+        if total:
+            parts.append(f"{total}tok")
+    if session:
+        used = session.total_tokens()
+        max_tok = session._max_tokens
+        if max_tok:
+            pct = int(100 - (used / max_tok * 100))
+            parts.append(f"ctx:{pct}%")
+    return "  ".join(parts)
+
+
 def _process_turn(cfg, session):
     """Run one user turn — may involve multiple tool-call rounds."""
     for turn in range(cfg.max_tool_turns):
@@ -145,23 +163,50 @@ def _process_turn(cfg, session):
         reasoning_chunks = []
         tool_calls = []
         warnings = []
+        usage_data = None
+        turn_start = time.time()
 
-        print("  ──", end=" ", flush=True)
+        # Bottom-anchored footer: spinner sits on line above SEP
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        spinner = RelaySpinner()
+        spinner.start()
+        sys.stdout.write("\n" + "  " + "─" * 48 + "\033[A")
+        sys.stdout.flush()
+
+        got_first_event = False
 
         for kind, data in stream_chat_completion(session.messages, TOOL_DEFS, cfg):
+            if not got_first_event:
+                spinner.stop()
+                got_first_event = True
+                sys.stdout.write("\r\033[K  ")
+                sys.stdout.flush()
+
             if kind == "content":
                 content_chunks.append(data)
-                print(data, end="", flush=True)
+                sys.stdout.write(data)
+                sys.stdout.flush()
             elif kind == "reasoning":
                 reasoning_chunks.append(data)
             elif kind == "tool_call":
                 tool_calls.append(data)
+            elif kind == "usage":
+                usage_data = data
             elif kind == "warning":
                 warnings.append(data)
             elif kind == "error":
-                print(f"\n  Error: {data}")
+                sys.stdout.write("\n  Error: %s\n" % data)
                 session.pop_last_user_message()
                 return
+
+        if not got_first_event:
+            spinner.stop()
+            sys.stdout.write("\r\033[K")
+            sys.stdout.flush()
+
+        elapsed = time.time() - turn_start
+        stats = _stats_line(elapsed, usage_data, session)
 
         print()
 
@@ -170,7 +215,7 @@ def _process_turn(cfg, session):
 
         if not tool_calls:
             if content_chunks:
-                print("  ──\n")
+                print(f"  ──  {stats}\n")
                 session.add_assistant_message(
                     "".join(content_chunks),
                     reasoning="".join(reasoning_chunks) or None,
