@@ -120,10 +120,6 @@ def main():
 
     while True:
         try:
-            # Print separator and user avatar BEFORE prompt
-            print(f"\n  {_SEP}")
-            for l in _user_box(username):
-                print(l)
             if ps:
                 line = ps.prompt("  > ").strip()
             else:
@@ -143,8 +139,19 @@ def main():
                 break
             continue
 
+        # Clear the input prompt line before showing user message
+        sys.stdout.write("\033[1A\033[2K")
+        sys.stdout.flush()
+
+        # Print user avatar box and message (right-aligned)
+        raw_box = _box_lines(username, _GREEN)
+        w = shutil.get_terminal_size().columns
+        pad = " " * max(0, w - 2 - len(raw_box[0]))
+        for l in raw_box:
+            print(f"  {pad}{l}")
+        print(f"  {pad}{line}")
+
         session.add_user_message(line)
-        # Input echo is already on screen ("> message"), no redraw needed
 
         try:
             _process_turn(cfg, session, username)
