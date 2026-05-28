@@ -78,7 +78,7 @@ pub fn detect_environment() -> EnvInfo {
     }
 }
 
-fn sh_hints(shell: &str) -> &'static str {
+fn shell_hint(shell: &str) -> &'static str {
     let lower = shell.to_lowercase();
     if lower.contains("cmd") || lower.ends_with("cmd.exe") {
         "Use cmd.exe syntax: 'dir', 'type file.txt', 'echo %VAR%', 'findstr pattern file'."
@@ -89,61 +89,49 @@ fn sh_hints(shell: &str) -> &'static str {
     }
 }
 
+static PROMPT_TEMPLATE: &str = include_str!("../prompts/system.md");
+
 pub fn build_system_prompt(
     env: &EnvInfo,
     mode: &crate::mode::ModeState,
     memory: &crate::memory::MemoryStore,
     skills: &crate::skill::SkillRegistry,
 ) -> String {
-    let shell = env.default_shell.clone();
-    let hints = sh_hints(&shell);
-
     let avail: Vec<&str> = env.tools.iter()
         .filter(|(_, &v)| v)
         .map(|(k, _)| k.as_str())
         .collect();
 
-    let mut prompt = format!(
-        r#"You are Relay, an AI agent running in a terminal environment.
+    let hints = shell_hint(&env.default_shell);
 
-## Environment
-- OS: {} ({})
-- Shell: {}
-- CWD: {}
-- Available: {}
-- Python: {}
+    // Memory section
+    let memory_text = if memory.entries.is_empty() {
+        "(none)".into()
+    } else {
+        memory.entries.iter()
+            .map(|e| format!("- [{}] {}: {}", e.memory_type_str(), e.name, e.description))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
 
-## Shell Hint
-{}
+    // Skills section
+    let skills_text = if skills.is_empty() {
+        "(none)".into()
+    } else {
+        skills.available_list()
+    };
 
-## Capabilities
-You have access to shell commands and file reading/writing tools. You can use glob and grep for file discovery.
-You can make multiple tool calls in sequence. If a tool fails, diagnose the issue and try a different approach.
-Use the default shell for commands unless you have a specific reason to use another.
-
-## Behavior
-{}"#,
-        env.os, env.os_version, shell, env.cwd,
-        avail.join(", "),
-        env.python_version.trim(),
-        hints,
-        mode.system_prompt_suffix(),
-    );
-
-    // Memory
-    if !memory.entries.is_empty() {
-        prompt.push_str("\n\n## Auto Memory\n");
-        for e in &memory.entries {
-            prompt.push_str(&format!("- [{}] {}: {}\n", e.memory_type_str(), e.name, e.description));
-        }
-    }
-
-    // Skills
-    if !skills.is_empty() {
-        prompt.push_str("\n## Available Skills\n");
-        prompt.push_str(&skills.available_list());
-        prompt.push_str("\nCall use_skill(\"skill-name\") to load a skill's full instructions.");
-    }
+    let mut prompt = PROMPT_TEMPLATE.to_string();
+    prompt = prompt.replace("{{OS}}", &env.os);
+    prompt = prompt.replace("{{OS_VERSION}}", &env.os_version);
+    prompt = prompt.replace("{{SHELL}}", &env.default_shell);
+    prompt = prompt.replace("{{CWD}}", &env.cwd);
+    prompt = prompt.replace("{{TOOLS}}", &avail.join(", "));
+    prompt = prompt.replace("{{PYTHON_VERSION}}", env.python_version.trim());
+    prompt = prompt.replace("{{SHELL_HINT}}", hints);
+    prompt = prompt.replace("{{MODE_BEHAVIOR}}", &mode.system_prompt_suffix());
+    prompt = prompt.replace("{{MEMORY}}", &memory_text);
+    prompt = prompt.replace("{{SKILLS}}", &skills_text);
 
     prompt
 }
@@ -166,7 +154,7 @@ mod tests {
         let memory = crate::memory::MemoryStore { entries: Vec::new() };
         let skills = crate::skill::SkillRegistry { skills: Vec::new() };
         let prompt = build_system_prompt(&env, &mode, &memory, &skills);
-        assert!(prompt.contains("Environment"));
         assert!(prompt.contains("Relay"));
+        assert!(prompt.contains("Thinking First"));
     }
 }

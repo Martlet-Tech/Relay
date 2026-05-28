@@ -70,7 +70,7 @@ pub async fn run_terminal(cfg: &Config, session: &mut Session, client: &ApiClien
         while let Some(event) = event_rx.recv().await {
             match event {
                 TurnEvent::Content(text) => { print!("{}", text); io::stdout().flush().ok(); }
-                TurnEvent::Thinking(text) => { print!("{}···{}{}", ui::ANSI_GRAY, text, ui::ANSI_RESET); io::stdout().flush().ok(); }
+                TurnEvent::Thinking(_text) => { /* reasoning_content — not displayed per-token */ }
                 TurnEvent::ToolCallExecuting { name, args } => {
                     println!("\n{}◆ {}({}){}", ui::ANSI_ORANGE, name, args, ui::ANSI_RESET);
                 }
