@@ -12,6 +12,40 @@ mod tui_impl {
     use ratatui::Frame;
     use tokio::sync::mpsc;
 
+    const AGENT_BLUE: Color = Color::Rgb(74, 158, 255);
+    const USER_GREEN: Color = Color::Rgb(74, 255, 74);
+    const ORANGE: Color = Color::Rgb(255, 165, 0);
+
+    #[allow(unused)]
+    fn agent_avatar(size: usize) -> Vec<Line<'static>> {
+        let c = "█".repeat(size);
+        let r = format!("{}{}{}", "█".repeat((size - 1).max(0)), "R", "█".repeat(size.saturating_sub(2)));
+        vec![
+            Line::from(Span::styled(c.clone(), Style::new().fg(AGENT_BLUE))),
+            Line::from(Span::styled(r, Style::new().fg(AGENT_BLUE))),
+            Line::from(Span::styled(c, Style::new().fg(AGENT_BLUE))),
+        ]
+    }
+
+    #[allow(unused)]
+    fn user_avatar(size: usize) -> Vec<Line<'static>> {
+        let ul = "█".repeat(size);
+        let um = format!("{}{}{}", "█".repeat((size - 1).max(0)), "U", "█".repeat(size.saturating_sub(2)));
+        vec![
+            Line::from(Span::styled(ul.clone(), Style::new().fg(USER_GREEN))),
+            Line::from(Span::styled(um, Style::new().fg(USER_GREEN))),
+            Line::from(Span::styled(ul, Style::new().fg(USER_GREEN))),
+        ]
+    }
+
+    fn prefix_badge(role: &str) -> Span<'static> {
+        match role {
+            "agent" => Span::styled(" ▌ ", Style::new().fg(AGENT_BLUE).add_modifier(Modifier::BOLD)),
+            "user" => Span::styled(" ▌ ", Style::new().fg(USER_GREEN).add_modifier(Modifier::BOLD)),
+            _ => Span::raw("   "),
+        }
+    }
+
     struct AppState {
         chat_lines: Vec<Line<'static>>,
         user_msg_indices: Vec<usize>,
@@ -55,8 +89,13 @@ mod tui_impl {
         fn flush_content(&mut self) {
             if !self.content_buf.is_empty() {
                 let text = std::mem::take(&mut self.content_buf);
-                for line in text.split('\n') {
-                    self.add_line(Line::from(Span::raw(line.to_string())));
+                for (i, segment) in text.split('\n').enumerate() {
+                    let mut spans = Vec::new();
+                    if i == 0 {
+                        spans.push(prefix_badge("agent"));
+                    }
+                    spans.push(Span::raw(segment.to_string()));
+                    self.add_line(Line::from(spans));
                 }
             }
         }
@@ -115,9 +154,11 @@ mod tui_impl {
         let visible = chat_area.height as usize;
         let mut display_lines = app.chat_lines.clone();
         if !app.content_buf.is_empty() {
-            for line in app.content_buf.split('\n') {
-                display_lines.push(Line::from(Span::styled(
-                    line.to_string(), Style::new().fg(Color::DarkGray))));
+            for (i, line) in app.content_buf.split('\n').enumerate() {
+                let mut spans = vec![Span::styled(if i == 0 { " ▌ " } else { "    " },
+                    Style::new().fg(AGENT_BLUE).add_modifier(Modifier::BOLD))];
+                spans.push(Span::styled(line.to_string(), Style::new().fg(Color::DarkGray)));
+                display_lines.push(Line::from(spans));
             }
         }
         let total = display_lines.len();
@@ -252,9 +293,11 @@ mod tui_impl {
                                     _ => app.status_text = format!("unknown: /{}", parts.first().unwrap_or(&"")),
                                 }
                             } else {
-                                app.add_user_line(Line::from(Span::styled(
-                                    format!(" │ {} ", text), Style::new().fg(Color::Green),
-                                )));
+                                app.add_user_line(Line::from(vec![
+                                    Span::raw(text.clone()),
+                                    Span::raw("  "),
+                                    prefix_badge("user"),
+                                ]));
                                 session.add_user_message(&text);
 
                                 app.processing = true;

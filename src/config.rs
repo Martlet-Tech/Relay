@@ -30,6 +30,9 @@ pub struct Config {
     // Run mode
     pub default_mode: String,
 
+    // UI
+    pub avatar_size: u32,
+
     // Anti-stuck
     pub anti_stuck_enabled: bool,
     pub reflect_after_failures: u32,
@@ -72,6 +75,7 @@ impl Default for Config {
             max_tool_output: 50_000,
             max_stderr_output: 10_000,
             default_mode: "auto".into(),
+            avatar_size: 3,
             anti_stuck_enabled: true,
             reflect_after_failures: 2,
             max_failures_before_hard_stop: 4,
