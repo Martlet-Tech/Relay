@@ -7,44 +7,97 @@ mod tui_impl {
     use ratatui::layout::{Constraint, Layout};
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+    use ratatui::text::Text;
     use ratatui::Frame;
     use tokio::sync::mpsc;
 
     struct AppState {
         chat_lines: Vec<Line<'static>>,
+        user_msg_indices: Vec<usize>,
         input: String,
         processing: bool,
         status_text: String,
         content_buf: String,
+        scroll_offset: usize,
+        auto_scroll: bool,
     }
 
     impl AppState {
         fn new() -> Self {
             Self {
                 chat_lines: Vec::new(),
+                user_msg_indices: Vec::new(),
                 input: String::new(),
                 processing: false,
                 status_text: String::new(),
                 content_buf: String::new(),
+                scroll_offset: 0,
+                auto_scroll: true,
             }
         }
 
         fn add_line(&mut self, line: Line<'static>) {
             self.chat_lines.push(line);
-        }
-
-        /// Flush buffered content as a single line.
-        fn flush_content(&mut self) {
-            if !self.content_buf.is_empty() {
-                let text = std::mem::take(&mut self.content_buf);
-                self.add_line(Line::from(ratatui::text::Span::raw(text)));
+            if self.auto_scroll {
+                self.scroll_offset = 0;
             }
         }
 
-        /// Buffer streaming content text.
+        fn add_user_line(&mut self, line: Line<'static>) {
+            self.user_msg_indices.push(self.chat_lines.len());
+            self.chat_lines.push(line);
+            if self.auto_scroll {
+                self.scroll_offset = 0;
+            }
+        }
+
+        fn flush_content(&mut self) {
+            if !self.content_buf.is_empty() {
+                let text = std::mem::take(&mut self.content_buf);
+                for line in text.split('\n') {
+                    self.add_line(Line::from(Span::raw(line.to_string())));
+                }
+            }
+        }
+
         fn buffer_content(&mut self, text: &str) {
             self.content_buf.push_str(text);
+        }
+
+        fn scroll_up(&mut self, amount: usize, visible: usize) {
+            let max_scroll = self.chat_lines.len().saturating_sub(visible);
+            self.scroll_offset = (self.scroll_offset + amount).min(max_scroll);
+            self.auto_scroll = self.scroll_offset == 0;
+        }
+
+        fn scroll_down(&mut self, amount: usize) {
+            self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+            self.auto_scroll = self.scroll_offset == 0;
+        }
+
+        fn prev_user_msg(&mut self, visible: usize) {
+            if self.user_msg_indices.is_empty() { return; }
+            let total = self.chat_lines.len();
+            let first_visible = total.saturating_sub(self.scroll_offset + visible);
+            let idx = self.user_msg_indices.iter().rev()
+                .find(|&&i| i < first_visible)
+                .copied()
+                .unwrap_or(self.user_msg_indices[0]);
+            self.scroll_offset = total.saturating_sub(idx + visible + 1).min(total.saturating_sub(visible));
+            self.auto_scroll = false;
+        }
+
+        fn next_user_msg(&mut self, visible: usize) {
+            if self.user_msg_indices.is_empty() { return; }
+            let total = self.chat_lines.len();
+            let first_visible = total.saturating_sub(self.scroll_offset + visible);
+            let idx = self.user_msg_indices.iter()
+                .find(|&&i| i > first_visible + 1)
+                .copied()
+                .unwrap_or(*self.user_msg_indices.last().unwrap_or(&0));
+            self.scroll_offset = total.saturating_sub(idx + 1).min(total.saturating_sub(visible));
+            self.auto_scroll = self.scroll_offset == 0;
         }
     }
 
@@ -57,9 +110,25 @@ mod tui_impl {
         ])
         .areas(area);
 
-        // Chat list
-        let items: Vec<ListItem> = app.chat_lines.iter().map(|l| ListItem::new(l.clone())).collect();
-        let chat = List::new(items).block(Block::default());
+        // Chat area — build live text from chat_lines + streaming buffer
+        frame.render_widget(Clear, chat_area);
+        let visible = chat_area.height as usize;
+        let mut display_lines = app.chat_lines.clone();
+        if !app.content_buf.is_empty() {
+            for line in app.content_buf.split('\n') {
+                display_lines.push(Line::from(Span::styled(
+                    line.to_string(), Style::new().fg(Color::DarkGray))));
+            }
+        }
+        let total = display_lines.len();
+        let scroll_lines = total.saturating_sub(visible + app.scroll_offset);
+        let text = Text::from(display_lines);
+        // Use style to ensure old cells are overwritten
+        let bg_style = Style::new().bg(Color::Rgb(42, 42, 42));
+        let chat = Paragraph::new(text)
+            .style(bg_style)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_lines as u16, 0));
         frame.render_widget(chat, chat_area);
 
         // Input
@@ -67,12 +136,12 @@ mod tui_impl {
             .block(Block::default().borders(Borders::ALL).title(" Input "));
         frame.render_widget(input, input_area);
 
-        // Status
-        let status = if app.processing {
-            format!(" Relay | {} | ⏳ processing ", cfg.model)
-        } else {
-            format!(" Relay | {} ", cfg.model)
-        };
+        // Status bar
+        let mode_indicator = if app.processing { " ⏳ " } else { "" };
+        let scroll_hint = if !app.auto_scroll && app.scroll_offset > 0 {
+            format!(" ↑{} ", app.scroll_offset)
+        } else { String::new() };
+        let status = format!(" Relay | {}{}{}{}", cfg.model, mode_indicator, scroll_hint, app.status_text);
         let status_widget = Paragraph::new(status)
             .style(Style::new().bg(Color::Rgb(0, 80, 128)).fg(Color::White));
         frame.render_widget(status_widget, status_area);
@@ -91,21 +160,25 @@ mod tui_impl {
             }
         );
 
-        // Setup terminal
         let mut terminal = ratatui::init();
-
         let (turn_tx, mut turn_rx) = mpsc::unbounded_channel::<TurnEvent>();
         let mut app = AppState::new();
-        let mut tick_count = 0u64;
 
         'main: loop {
+            // Check for resize and get terminal size
+            let term_h = terminal.size().map(|s| s.height as usize).unwrap_or(24);
+            let visible_lines = term_h.saturating_sub(5);
+            // Clamp scroll_offset after resize
+            let max_scroll = app.chat_lines.len().saturating_sub(visible_lines);
+            app.scroll_offset = app.scroll_offset.min(max_scroll);
+
             // Drain turn events
             while let Ok(event) = turn_rx.try_recv() {
                 match event {
                     TurnEvent::Content(t) => app.buffer_content(&t),
                     TurnEvent::ToolCallExecuting { name, args } => {
                         app.flush_content();
-                        app.add_line(Line::from(Span::raw(""))); // blank separator
+                        app.add_line(Line::from(Span::raw("")));
                         app.add_line(Line::from(vec![
                             Span::styled(" ◆ ", Style::new().fg(Color::Rgb(255, 165, 0))),
                             Span::styled(name, Style::new().fg(Color::Rgb(255, 165, 0)).add_modifier(Modifier::BOLD)),
@@ -131,7 +204,7 @@ mod tui_impl {
                     TurnEvent::Error(msg) => {
                         app.add_line(Line::from(Span::styled(format!(" ✗ {}", msg), Style::new().fg(Color::Red))));
                     }
-                    TurnEvent::Done => { app.flush_content(); app.processing = false; },
+                    TurnEvent::Done => { app.flush_content(); app.processing = false; }
                     TurnEvent::ModeChanged { from, to } => {
                         app.status_text = format!("{:?} → {:?}", from, to);
                     }
@@ -139,21 +212,25 @@ mod tui_impl {
                 }
             }
 
-            // Handle keyboard (poll non-blocking)
+            // Keyboard
             if event::poll(std::time::Duration::from_millis(20)).ok() == Some(true) {
                 if let Ok(Event::Key(key)) = event::read() {
                     if key.kind != crossterm::event::KeyEventKind::Press { continue; }
                     use KeyCode::*;
+                    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                    let alt = key.modifiers.contains(KeyModifiers::ALT);
+
                     match key.code {
-                        Char(c) if key.modifiers == KeyModifiers::NONE => app.input.push(c),
-                        Char('c') if key.modifiers == KeyModifiers::CONTROL && !app.processing => break 'main,
+                        Char(c) if !ctrl && !alt && !shift => app.input.push(c),
+                        Char('c') if ctrl && !app.processing => break 'main,
                         Enter if !app.processing && !app.input.is_empty() => {
                             let text = std::mem::take(&mut app.input);
                             if text.starts_with('/') {
                                 let parts: Vec<&str> = text[1..].split_whitespace().collect();
                                 match parts.first().map(|s| *s) {
                                     Some("exit") | Some("quit") => break 'main,
-                                    Some("clear") => app.chat_lines.clear(),
+                                    Some("clear") => { app.chat_lines.clear(); app.user_msg_indices.clear(); }
                                     Some("auto") => {
                                         let old = mode.current;
                                         mode.switch_to(AgentMode::Auto);
@@ -175,7 +252,7 @@ mod tui_impl {
                                     _ => app.status_text = format!("unknown: /{}", parts.first().unwrap_or(&"")),
                                 }
                             } else {
-                                app.add_line(Line::from(Span::styled(
+                                app.add_user_line(Line::from(Span::styled(
                                     format!(" │ {} ", text), Style::new().fg(Color::Green),
                                 )));
                                 session.add_user_message(&text);
@@ -199,15 +276,18 @@ mod tui_impl {
                         }
                         Backspace => { app.input.pop(); }
                         Esc if !app.processing => break 'main,
+                        Up => app.scroll_up(1, visible_lines),
+                        Down => app.scroll_down(1),
+                        PageUp if shift => app.prev_user_msg(visible_lines),
+                        PageDown if shift => app.next_user_msg(visible_lines),
+                        PageUp => app.scroll_up(visible_lines, visible_lines),
+                        PageDown => app.scroll_down(visible_lines),
                         _ => {}
                     }
                 }
             }
 
-            // Render
             let _ = terminal.draw(|f| render(f, &app, cfg));
-
-            tick_count += 1;
         }
 
         let _ = ratatui::restore();

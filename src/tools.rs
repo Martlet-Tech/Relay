@@ -312,6 +312,14 @@ fn tool_write(args: &Map<String, serde_json::Value>) -> Result<String, String> {
 
 fn tool_glob(args: &Map<String, serde_json::Value>) -> Result<String, String> {
     let pattern = get_str(args, "pattern")?;
+    // Safety: reject filesystem root
+    let normalized = pattern.trim_end_matches('\\').trim_end_matches('/');
+    if normalized.is_empty() || normalized == "." || normalized == "/" || normalized == "\\" {
+        return Err("refusing to glob filesystem root — too broad".into());
+    }
+    if normalized.len() == 2 && normalized.ends_with(':') {
+        return Err("refusing to glob drive root — too broad".into());
+    }
     let max_results = 200;
     let mut results = Vec::new();
 
@@ -347,6 +355,15 @@ fn tool_glob(args: &Map<String, serde_json::Value>) -> Result<String, String> {
 fn tool_grep(args: &Map<String, serde_json::Value>) -> Result<String, String> {
     let pattern = get_str(args, "pattern")?;
     let path = get_str(args, "path")?;
+    // Safety: reject filesystem root
+    let normalized = path.trim_end_matches('\\').trim_end_matches('/');
+    if normalized.is_empty() || normalized == "." || normalized == "/" || normalized == "\\" {
+        return Err("refusing to search filesystem root — too broad".into());
+    }
+    // Also reject drive roots like "C:" or "D:"
+    if normalized.len() == 2 && normalized.ends_with(':') {
+        return Err("refusing to search drive root — too broad".into());
+    }
     let glob_filter = args.get("glob").and_then(|v| v.as_str()).unwrap_or("");
     let max_matches = 200;
     let mut matches = Vec::new();
