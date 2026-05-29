@@ -130,7 +130,30 @@ pub fn active_tool_defs(mode: crate::mode::AgentMode) -> &'static [ToolDef] {
     }
 }
 
-pub fn execute_tool(
+/// Execute a tool with a timeout. If the tool doesn't complete within
+/// `timeout`, it returns an error. This prevents any tool from hanging forever.
+pub fn execute_tool_with_timeout(
+    name: &str,
+    args_str: &str,
+    config: &crate::config::Config,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    let tool_name = name.to_string();
+    let err_name = tool_name.clone();
+    let args = args_str.to_string();
+    let cfg = config.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = execute_tool_inner(&tool_name, &args, &cfg, None);
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(r) => r,
+        Err(_) => Err(format!("tool '{err_name}' timed out after {:.0}s", timeout.as_secs_f64())),
+    }
+}
+
+fn execute_tool_inner(
     name: &str,
     args_str: &str,
     config: &crate::config::Config,
@@ -482,7 +505,7 @@ mod tests {
     #[test]
     fn test_unknown_tool() {
         let cfg = crate::config::Config::default();
-        let result = execute_tool("nonexistent", "{}", &cfg, None);
+        let result = execute_tool_with_timeout("nonexistent", "{}", &cfg, std::time::Duration::from_secs(5));
         assert!(result.is_err());
     }
 

@@ -221,7 +221,8 @@ pub async fn process_turn(
 
             // Get skill registry for use_skill tool
             // Pass None since we don't have it in this context — use_skill won't work
-            let result = tools::execute_tool(name, args, cfg, None);
+            let tool_timeout = std::time::Duration::from_secs_f64(cfg.default_shell_timeout.max(5.0));
+            let result = tools::execute_tool_with_timeout(name, args, cfg, tool_timeout);
 
             match result {
                 Ok(output) => {
