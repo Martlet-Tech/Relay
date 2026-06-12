@@ -192,7 +192,6 @@ fn tool_shell(args: &Map<String, serde_json::Value>, config: &crate::config::Con
     let max_timeout_ms = (300.0 * 1000.0) as u64;
     let timeout_ms = timeout_ms.min(max_timeout_ms);
 
-    use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
 
     let shell = if cfg!(target_os = "windows") {
@@ -213,51 +212,29 @@ fn tool_shell(args: &Map<String, serde_json::Value>, config: &crate::config::Con
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
 
-    let max_out = config.max_tool_output;
-    let max_err = config.max_stderr_output;
+    // Read raw bytes with size cap, then decode — handles non-UTF-8 code pages on Windows
+    let max_cap = (config.max_tool_output * 2) as u64;
     let (tx, rx) = std::sync::mpsc::channel();
     let tx2 = tx.clone();
 
     std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        let mut out = String::new();
-        for line in reader.lines() {
-            match line {
-                Ok(l) => {
-                    if out.len() < max_out {
-                        out.push_str(&l);
-                        out.push('\n');
-                    }
-                }
-                Err(e) => {
-                    let _ = tx.send(format!("(read error: {e})"));
-                    return;
-                }
-            }
-        }
-        let _ = tx.send(out);
+        use std::io::Read;
+        let mut buf = Vec::new();
+        let _ = stdout.take(max_cap).read_to_end(&mut buf);
+        let s = String::from_utf8_lossy(&buf);
+        let _ = tx.send(s.to_string());
     });
 
     std::thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        let mut out = String::new();
-        for line in reader.lines() {
-            match line {
-                Ok(l) => {
-                    if out.len() < max_err {
-                        out.push_str(&l);
-                        out.push('\n');
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        if !out.is_empty() {
-            let _ = tx2.send(format!("(stderr)\n{out}"));
+        use std::io::Read;
+        let mut buf = Vec::new();
+        let _ = stderr.take(max_cap).read_to_end(&mut buf);
+        let s = String::from_utf8_lossy(&buf);
+        if !s.trim().is_empty() {
+            let _ = tx2.send(format!("(stderr)\n{}", s.trim()));
         }
     });
 
-    // Wait with timeout
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_millis(timeout_ms);
 
@@ -294,7 +271,8 @@ fn tool_shell(args: &Map<String, serde_json::Value>, config: &crate::config::Con
 
     let output = match (stdout_result.as_str(), stderr_result.as_str()) {
         (o, s) if s.starts_with("(stderr)") => {
-            format!("{}{}", o.trim_end(), s.replacen("(stderr)\n", "\n(stderr)\n", 1))
+            let trimmed = if o.trim_end().is_empty() { String::new() } else { format!("{}\n", o.trim_end()) };
+            format!("{}{}", trimmed, s.replacen("(stderr)\n", "(stderr)\n", 1))
         }
         (o, _) => o.trim_end().to_string(),
     };
