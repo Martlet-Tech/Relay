@@ -157,11 +157,25 @@ mod tui_impl {
         frame.render_widget(para, chat_area);
 
         // Input
+        let send_hint = if cfg.enter_sends { "Enter:send" } else { "S-Enter:send" };
+        let nl_hint = if cfg.enter_sends { "S-Enter:newline" } else { "Enter:newline" };
+        let key_hint = format!(" {} {} ", send_hint, nl_hint);
+        let hint_len = key_hint.len() as u16;
         let input = Paragraph::new(Line::from(vec![
             Span::styled("> ", Style::new().fg(AGENT).add_modifier(Modifier::BOLD)),
             Span::raw(sanitize(&app.input)),
         ])).style(Style::new().bg(BG));
         frame.render_widget(input, input_area);
+        // Key binding hint on the right side of input line
+        let hint_x = input_area.right().saturating_sub(hint_len + 1);
+        if hint_x > input_area.x {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(key_hint, Style::new().fg(Color::DarkGray).bg(BG)),
+                ])),
+                ratatui::layout::Rect::new(hint_x, input_area.y, hint_len + 1, 1),
+            );
+        }
 
         // Status
         let busy = if app.processing { " ⏳" } else { "" };
@@ -206,7 +220,9 @@ mod tui_impl {
                     TurnEvent::ToolCallResult { display, success } => {
                         app.flush_stream();
                         let c = if success { DIM } else { Color::Red };
-                        app.push(Line::from(Span::styled(display, Style::new().fg(c))));
+                        for line in display.split('\n') {
+                            app.push(Line::from(Span::styled(line.to_string(), Style::new().fg(c))));
+                        }
                     }
                     TurnEvent::Stats { elapsed, tokens, ctx_pct } => {
                         app.push(Line::from(Span::styled(ui::stats_line(elapsed, tokens, ctx_pct), Style::new().fg(DIM))));
@@ -233,10 +249,16 @@ mod tui_impl {
                     let alt = key.modifiers.contains(KeyModifiers::ALT);
                     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
+                    let is_enter = key.code == Enter;
+                    let is_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                    let send_on_enter = cfg.enter_sends;
+
                     match key.code {
                         Char(c) if !ctrl && !alt => app.input.push(c),
                         Char('c') if ctrl && !app.processing => break 'main,
-                        Enter if !ctrl && !app.processing && !app.input.is_empty() => {
+                        Enter if !app.processing && (
+                            (send_on_enter && !is_shift) || (!send_on_enter && is_shift)
+                        ) && !app.input.is_empty() => {
                             let text = std::mem::take(&mut app.input);
                             if text.starts_with('/') {
                                 let parts: Vec<&str> = text[1..].split_whitespace().collect();
@@ -271,7 +293,9 @@ mod tui_impl {
                                 });
                             }
                         }
-                        Enter if ctrl => app.input.push('\n'),
+                        Enter if !app.processing && (
+                            (!send_on_enter && !is_shift) || (send_on_enter && is_shift)
+                        ) => app.input.push('\n'),
                         Backspace => { app.input.pop(); }
                         Esc if !app.processing => break 'main,
                         Up => app.scroll_up(1, visible),

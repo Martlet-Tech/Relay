@@ -75,10 +75,12 @@ pub async fn run_terminal(cfg: &Config, session: &mut Session, client: &ApiClien
                     println!("\n{}◆ {}({}){}", ui::ANSI_ORANGE, name, args, ui::ANSI_RESET);
                 }
                 TurnEvent::ToolCallResult { display, success } => {
-                    if success {
-                        println!("{}{}{}", ui::ANSI_GRAY, display, ui::ANSI_RESET);
-                    } else {
-                        println!("{}✗ {}{}", ui::ANSI_RED, display, ui::ANSI_RESET);
+                    for line in display.split('\n') {
+                        if success {
+                            println!("{}{}{}", ui::ANSI_GRAY, line, ui::ANSI_RESET);
+                        } else {
+                            println!("{}✗ {}{}", ui::ANSI_RED, line, ui::ANSI_RESET);
+                        }
                     }
                 }
                 TurnEvent::ToolCallProposed { name, args, display: _ } => {

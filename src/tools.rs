@@ -92,7 +92,7 @@ fn use_skill_param() -> serde_json::Value {
 
 pub static FULL_TOOL_DEFS: once_cell::sync::Lazy<Vec<ToolDef>> = once_cell::sync::Lazy::new(|| {
     vec![
-        tool_def("shell", "Execute a shell command and return output. Use for running programs, scripts, and CLI tools. Blocks until completion or timeout (default 15s, max 300s). Output truncated at 50KB.", string_param()),
+        tool_def("shell", "Execute a shell command and return output. Use for running programs, scripts, and CLI tools. Blocks until completion or timeout (default 15s, max 300s). Output truncated at 50KB.\n\nIMPORTANT: Write ROBUST commands. On Windows use `command 2>nul || fallback`. On Linux/Mac use `command 2>/dev/null || fallback`. Prefer one compound command over multiple sequential calls.", string_param()),
         tool_def("read", "Read a text file from the local filesystem. Binary files (null-byte detected) will be rejected. Max 100K characters.", read_param()),
         tool_def("write", "Write content to a file. Creates parent directories if missing. Overwrites existing files.", write_param()),
         tool_def("glob", "List files matching a glob pattern (e.g. '**/*.rs'). Max 200 results.", glob_param()),

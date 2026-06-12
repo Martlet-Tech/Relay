@@ -81,11 +81,11 @@ pub fn detect_environment() -> EnvInfo {
 fn shell_hint(shell: &str) -> &'static str {
     let lower = shell.to_lowercase();
     if lower.contains("cmd") || lower.ends_with("cmd.exe") {
-        "Use cmd.exe syntax: 'dir', 'type file.txt', 'echo %VAR%', 'findstr pattern file'."
+        "Use cmd.exe syntax: 'dir', 'type file.txt', 'echo %VAR%', 'findstr pattern file'.\n  For robust commands use 'command 2>nul || fallback_command'.\n  For modern queries use 'wmic ...' or fall back to 'powershell -Command \"...\"'."
     } else if lower.contains("powershell") {
-        "Use PowerShell syntax: 'Get-ChildItem', 'Get-Content', 'Select-String', '$env:VAR'."
+        "Use PowerShell syntax: 'Get-ChildItem', 'Get-Content', 'Select-String', '$env:VAR'.\n  For robust commands use 'command 2>$null; if (-not $?) { fallback }'.\n  Or chain with 'cmd /c wmic ... || powershell -Command \"...\"'."
     } else {
-        "Use POSIX shell syntax: ls, cat, grep, $VAR."
+        "Use POSIX shell syntax: ls, cat, grep, $VAR.\n  For robust commands use 'command 2>/dev/null || fallback_command'."
     }
 }
 
@@ -155,6 +155,6 @@ mod tests {
         let skills = crate::skill::SkillRegistry { skills: Vec::new() };
         let prompt = build_system_prompt(&env, &mode, &memory, &skills);
         assert!(prompt.contains("Relay"));
-        assert!(prompt.contains("Thinking First"));
+        assert!(prompt.contains("Think First"));
     }
 }

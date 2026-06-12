@@ -57,6 +57,14 @@ pub async fn process_turn(
     let mut reflect = ReflectState::new();
     let turn_start = std::time::Instant::now();
 
+    // Pre-think injection: force deliberate planning before any tool use
+    session.inject_system_message(
+        "Before your first action: identify the OS, the goal, and the one robust command that will work. \
+         Write compound commands with fallbacks (e.g. `wmic ... 2>nul || powershell ...`). \
+         Do NOT run test commands or obvious failures."
+    );
+    let _ = event_tx.send(TurnEvent::Warning("Forced pre-think: plan before acting".into()));
+
     for _turn in 0..cfg.max_tool_turns {
         session.ensure_context_fit();
 
